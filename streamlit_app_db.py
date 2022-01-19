@@ -4,65 +4,62 @@ from st_aggrid import GridOptionsBuilder, AgGrid, GridUpdateMode, DataReturnMode
 import pandas as pd
 import sqlite3
 
-@st.experimental_singleton
-def get_sqlite_conn():
-    conn = sqlite3.connect("si_garden_trees.db")
-    return conn
-
-conn = get_sqlite_conn()
+st.set_page_config(
+     page_title="SI Gardens Tree Annotator",
+     page_icon="🌳",
+     layout="wide"
+ )
 
 st.markdown('## SI Gardens Tree Annotator')
 
-query_params = st.experimental_get_query_params()
-if 'accession' in query_params:
-    tree_id = query_params['accession'][0]
-else:
-    tree_id = 'SG-2011-0516A'
-
-@st.cache
 def fetch_data():
-    df = pd.read_csv('garden_trees.tsv', sep='\t')
-    image_df = pd.read_csv('garden_edan_image_data.tsv', sep='\t')
-    return df, image_df
+    con = sqlite3.connect("si_garden_trees_testing.db")
+    meta_df = pd.read_sql_query("SELECT * from tree_metadata", con)
+    image_df = pd.read_sql_query("SELECT * from tree_images", con)
+    con.close()
+    return meta_df, image_df
 
-df, image_df = fetch_data()
+def display_table(df):
+    gb = GridOptionsBuilder.from_dataframe(df)
+    gb.configure_selection('single', use_checkbox=False)
+    gb.configure_pagination(paginationAutoPageSize=True)
+    gridOptions = gb.build()
+    return AgGrid(
+        df, 
+        gridOptions=gridOptions,
+        height=500, 
+        width='100%',
+        return_mode='AS_INPUT',
+        update_mode='SELECTION_CHANGED',
+        fit_columns_on_grid_load=True,
+        allow_unsafe_jscode=True, #Set it to True to allow jsfunction to be injected
+        )
 
-gb = GridOptionsBuilder.from_dataframe(df)
-gb.configure_selection('single', use_checkbox=False)
-gb.configure_pagination(paginationAutoPageSize=True)
-gridOptions = gb.build()
-grid_response = AgGrid(
-    df, 
-    gridOptions=gridOptions,
-    height=500, 
-    width='100%',
-    return_mode='AS_INPUT',
-    update_mode='SELECTION_CHANGED',
-    fit_columns_on_grid_load=False,
-    allow_unsafe_jscode=True, #Set it to True to allow jsfunction to be injected
-    )
+def record_annotations():
+    response = {'test':'test'}
+    return response
+
+meta_df, image_df = fetch_data()
+
+grid_response = display_table(meta_df)
+
+st.markdown('## Tree Details')
 
 if len(grid_response['selected_rows']):
     selected_tree = grid_response['selected_rows'][0]
-    search_id = f'SG-{selected_tree["accession_number"]}'
-    st.experimental_set_query_params(accession = search_id)
-    selected_images = image_df[image_df['object_id'] == search_id]['ids_id'].tolist()
-
+    tree_id = selected_tree['accession_number']
+    st.experimental_set_query_params(accession = tree_id)
 else:
-    selected_tree = {
-        "accession_number": "2011-1257A",
-        "scientific_name": "Prunus subhirtella 'Pendula'",
-        "common_name": "Weeping Higan Cherry",
-        "building": "NASM",
-        "life_form": "Deciduous tree",
-        "media_count": 4
-        }
-    selected_images = []
-    im_to_show = 'SG-2011-1257A-WIN1-HL'
+    query_params = st.experimental_get_query_params()
+    if 'accession' in query_params:
+        tree_id = query_params['accession'][0]
+    else:
+        tree_id = meta_df.at[0,'accession_number']
 
 tree_col1, tree_col2 = st.columns(2)
 with tree_col2:
-    st.write(selected_tree)
+    st.write(tree_id)
+    selected_images = image_df[image_df['accession_number'] == tree_id][['ids_id','image_category']].to_dict(orient='records')
     if len(selected_images) > 0:
         im_to_show = st.radio('Image to show',
                               selected_images,
@@ -70,74 +67,76 @@ with tree_col2:
 with tree_col1:
     image_url = f'https://ids.si.edu/ids/deliveryService/id/{im_to_show}/500'
     st.image(image_url)
-    st.write(im_to_show)
 
-evergreen = st.radio('Is the tree deciduous or evergreen?',
-                    ['Deciduous','Evergreen','Unclear'],
-                    index=2,
-                    help='or broadleaf vs conifer??')
+st.markdown('## Annotation')
 
-pruning = st.radio('What type of pruning system is employed?',
-                    ['Natural pruning system',
-                    'Topiary pruning system',
-                    'Specialty pruning system',
-                    'Unclear'],
-                    index=3,
-                    help='Details on Question 2')
-
-if pruning == 'Natural pruning system':
-    stem = st.radio('What form is this tree?',
+with st.form(key = "annotation_form", clear_on_submit=True):
+    evergreen = st.radio('Is the tree deciduous or evergreen?',
+                        ['Deciduous','Evergreen','Unclear'],
+                        index=2,
+                        key='evergreen',
+                        help='or broadleaf vs conifer??')
+    pruning = st.radio('What type of pruning system is employed?',
+                        ['Natural pruning system',
+                        'Topiary pruning system',
+                        'Specialty pruning system',
+                        'Unclear'],
+                        index=3,
+                        help='Details on Question 2')
+    st.markdown('---')
+    c1, c2, c3 = st.columns([1, 1, 1])
+    with c1:
+        st.markdown('*Natural pruning questions*')
+        stem = st.radio('What form is this tree?',
                         ['Single-stem',
                         'Multistem',
                         'Clump',
                         'Shrub',
-                        'Unclear'],
-                        index=4,
+                        'Unclear',
+                        'N/A'],
+                        index=5,
                     help='(generally initially trained to this form in the nursery)')
-    if stem == 'Single-stem':
         tree_form = st.radio('Which training system is used?',
                             ['Managed - central leader form',
                              'Managed - other system',
                             'Unmanaged',
-                            'Unclear'],
-                            index=3,
+                            'Unclear',
+                            'N/A'],
+                            index=4,
                             help='Details on Question 5')
-
-    branched = st.radio('Is the tree high-branched or low-branched?',
-                        ['Low-branched',
-                        'High-branched',
-                        'Unclear'],
-                        index=2,
-                        help='Details on Question 4')
-elif pruning == 'Topiary pruning system':
-    hedge = st.radio('Is tree managed as hedge or individual specimen?',
+        branched = st.radio('Is the tree high-branched or low-branched?',
+                            ['Low-branched',
+                            'High-branched',
+                            'Unclear',
+                            'N/A'],
+                            index=3,
+                            help='Details on Question 4')
+    with c2:
+        st.markdown('*Topiary pruning questions*')
+        hedge = st.radio('Is tree managed as hedge or individual specimen?',
                             ['Hedge',
                              'Individual',
-                            'Unclear'],
-                            index=2)
-elif pruning == 'Specialty pruning system':
-    specialty_pruning = st.radio('Which specialty pruning system is used?',
+                            'Unclear',
+                            'N/A'],
+                            index=3)
+    with c3:
+        st.markdown('*Specialty pruning questions*')
+        specialty_pruning = st.radio('Which specialty pruning system is used?',
                         [' Pollarding',
                         ' Espalier (none currently present)',
                         'Pleeching (none currently present)',
-                        'Unclear'],
-                        index=3)
+                        'Unclear',
+                        'N/A'],
+                        index=4)
+    st.markdown('---')
+    annotator = st.radio('Who is annotating?',
+                        ['Courtney','Jake','Kayleigh'])
 
-annotator = st.radio('Who is annotating?',
-                        ['Courtney','Jake','Kayleigh','TEST'])
+    notes = st.text_area('Notes')
 
-notes = st.text_area('Notes')
+    submitted = st.form_submit_button("Submit")
 
-st.sidebar.markdown('## Annotation Progress')
+    if submitted:
+        response = record_annotations()
+        st.write(response)
 
-cur = conn.cursor()
-cur.execute('SELECT COUNT(DISTINCT accession_number) FROM tree_annotations')
-result = cur.fetchone()
-annotation_count = result[0]
-
-cur.execute('SELECT COUNT(*) FROM tree_metadata')
-result = cur.fetchone()
-tree_count = result[0]
-
-st.sidebar.markdown(f'*{annotation_count}* of *{tree_count}* trees annotated')
-st.sidebar.progress((annotation_count / tree_count))
